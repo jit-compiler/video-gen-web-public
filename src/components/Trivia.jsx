@@ -1,14 +1,21 @@
 "use client";
 import React, { useState } from "react";
 import axios from "axios";
+import styles from "@/css/Trivia.module.css";
+import { toast } from "react-toastify";
+import "react-toastify/dist/ReactToastify.css";
+import { ToastContainer } from "react-toastify";
 
 const Trivia = () => {
   const [amount, setAmount] = useState(0);
   const [videoLinks, setVideoLinks] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [progress, setProgress] = useState("");
+  const [apiKey, setApiKey] = useState("");
+  const [templateID, setTemplateID] = useState("");
 
   const createVideos = async () => {
-    if (amount) {
+    if (amount && apiKey && templateID) {
       setLoading(true);
       try {
         // Fetch questions from our API using Axios
@@ -23,16 +30,19 @@ const Trivia = () => {
         }
 
         console.log(selectedQuestions);
+        setProgress("Questions Selected");
 
         // Set up Shotstack API configurations
-        const apiKey = "iGJpKfdikkOVmEAlWnX6tfw5l5hHJ6jQxl9cZMYR";
         const shotstackApiUrl = "https://api.shotstack.io/v1";
-        const templateId = "72b36571-12d7-431f-8986-148c5f786ef7";
 
         // Prepare an array to store video links
         const newVideoLinks = [];
 
-        for (const question of selectedQuestions) {
+        // Prepare an array to store all the promises
+        const promises = [];
+
+        for (let i = 0; i < selectedQuestions.length; i++) {
+          const question = selectedQuestions[i];
           console.log(question["Question"]);
           const mergeFields = [
             { find: "question", replace: question["Question"] },
@@ -43,7 +53,7 @@ const Trivia = () => {
           ];
 
           const requestData = {
-            id: templateId,
+            id: templateID,
             merge: mergeFields,
           };
 
@@ -57,47 +67,52 @@ const Trivia = () => {
             data: requestData,
           };
 
-          try {
-            const response = await axios(config);
-            console.log(JSON.stringify(response.data, null, 2));
-
-            // Polling for rendering status
-            let renderStatus = "queued";
-
-            while (renderStatus !== "done" && renderStatus !== "failed") {
-              try {
-                const renderResponse = await axios.get(
-                  `https://api.shotstack.io/v1/render/${response.data.response.id}`,
-                  {
-                    headers: {
-                      "x-api-key": "iGJpKfdikkOVmEAlWnX6tfw5l5hHJ6jQxl9cZMYR",
-                    },
-                  }
-                );
-                renderStatus = renderResponse.data.response.status;
-                console.log(`Render Status: ${renderStatus}`);
-
-                if (renderStatus === "done") {
-                  const videoUrl = renderResponse.data.response.url;
-                  newVideoLinks.push(videoUrl);
-                  console.log(`Video URL: ${videoUrl}`);
-                } else if (renderStatus === "failed") {
-                  console.log("Video rendering failed.");
-                }
-
-                // Sleep for a specific duration before polling again
-                await new Promise((resolve) => setTimeout(resolve, 5000));
-              } catch (e) {
-                console.log(`Unable to get the render status: ${e}`);
-                break; // Exit the loop if an error occurs
-              }
-            }
-          } catch (error) {
-            console.error(error);
-          }
+          // Add the promise to the array
+          promises.push(axios(config));
         }
 
+        // Wait for all the promises to resolve
+        const responses = await Promise.all(promises);
+
+        // Polling for rendering status
+        const statusPromises = responses.map(async (response, index) => {
+          let renderStatus = "queued";
+          while (renderStatus !== "done" && renderStatus !== "failed") {
+            try {
+              const renderResponse = await axios.get(
+                `https://api.shotstack.io/v1/render/${response.data.response.id}`,
+                {
+                  headers: {
+                    "x-api-key": apiKey,
+                  },
+                }
+              );
+              renderStatus = renderResponse.data.response.status;
+              console.log(`Render Status: ${renderStatus}`);
+              setProgress("Render Status: Rendering"); // Set the progress to "Rendering"
+              if (renderStatus === "done") {
+                const videoUrl = renderResponse.data.response.url;
+                newVideoLinks.push(videoUrl);
+                console.log(`Video URL: ${videoUrl}`);
+                setVideoLinks([...videoLinks, videoUrl]); // Update the state with the new video link
+              } else if (renderStatus === "failed") {
+                console.log("Video rendering failed.");
+              }
+
+              // Sleep for a specific duration before polling again
+              await new Promise((resolve) => setTimeout(resolve, 5000));
+            } catch (e) {
+              console.log(`Unable to get the render status: ${e}`);
+              break; // Exit the loop if an error occurs
+            }
+          }
+        });
+
+        // Wait for all the status promises to resolve
+        await Promise.all(statusPromises);
+
         // Update the state with new video links
+        setProgress("Render Status: Done");
         setVideoLinks(newVideoLinks);
       } catch (error) {
         console.error(error);
@@ -107,30 +122,68 @@ const Trivia = () => {
     }
   };
 
+  const copyToClipboard = (text) => {
+    navigator.clipboard.writeText(text).then(
+      function () {
+        console.log("Copying to clipboard was successful!");
+        toast.success("Copied To Clipboard!", {
+          autoClose: 500,
+          hideProgressBar: true,
+        });
+      },
+      function (err) {
+        console.error("Could not copy text: ", err);
+      }
+    );
+  };
+
   return (
     <div>
-      <h1>Create videos</h1>
-      <input
-        type="number"
-        placeholder="How many videos?"
-        onChange={(e) => {
-          setAmount(e.target.value);
-        }}
-      />
-      <button onClick={createVideos} disabled={loading}>
-        {loading ? "Loading..." : "Submit"}
-      </button>
-      {videoLinks.map((link, index) => (
-        <div key={index}>
-          <video controls width="320" height="240">
-            <source src={link} type="video/mp4" />
-            Your browser does not support the video tag.
-          </video>
-          <a href={link} target="_blank" rel="noopener noreferrer">
-            Video {index + 1}
-          </a>
-        </div>
-      ))}
+      <ToastContainer />
+      <div className={styles.header}>
+        <h1>Create videos</h1>
+        <input
+          type="text"
+          placeholder="Shotstack api key"
+          onChange={(e) => {
+            setApiKey(e.target.value);
+          }}
+        />
+        <input
+          type="text"
+          placeholder="Shotstack template ID"
+          onChange={(e) => {
+            setTemplateID(e.target.value);
+          }}
+        />
+        <input
+          type="number"
+          placeholder="How many videos?"
+          onChange={(e) => {
+            setAmount(e.target.value);
+          }}
+        />
+        <button onClick={createVideos} disabled={loading}>
+          {loading ? "Loading..." : "Submit"}
+        </button>
+        {progress}
+      </div>
+      <div className={styles.videos}>
+        {videoLinks.map((link, index) => (
+          <div key={index} className={styles.video__wrapper}>
+            <video controls width="180" height="320">
+              <source src={link} type="video/mp4" />
+              Your browser does not support the video tag.
+            </video>
+            <button
+              onClick={() => copyToClipboard(link)}
+              className={styles.copy}
+            >
+              Copy Link
+            </button>
+          </div>
+        ))}
+      </div>
     </div>
   );
 };
